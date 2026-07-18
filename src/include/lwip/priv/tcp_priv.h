@@ -243,6 +243,13 @@ err_t            tcp_process_refused_data(struct tcp_pcb *pcb);
 #define TCP_OVERSIZE_DBGCHECK 0
 #endif
 
+/** Extra self-check of the cached pcb->unsent_tail pointer: walks the whole
+    unsent queue to re-derive the tail, defeating the optimization — keep off
+    unless hunting a queue-maintenance bug. Overridable from lwipopts.h. */
+#ifndef TCP_UNSENT_TAIL_DBGCHECK
+#define TCP_UNSENT_TAIL_DBGCHECK 0
+#endif
+
 /** Don't generate checksum on copy if CHECKSUM_GEN_TCP is disabled */
 #define TCP_CHECKSUM_ON_COPY  (LWIP_CHECKSUM_ON_COPY && CHECKSUM_GEN_TCP)
 

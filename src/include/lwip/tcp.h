@@ -336,6 +336,8 @@ struct tcp_pcb {
 
   /* These are ordered by sequence number: */
   struct tcp_seg *unsent;   /* Unsent (queued) segments. */
+  struct tcp_seg *unsent_tail; /* Last segment on the unsent queue,
+                                  NULL iff unsent == NULL (cached tail) */
   struct tcp_seg *unacked;  /* Sent but unacknowledged segments. */
 #if TCP_QUEUE_OOSEQ
   struct tcp_seg *ooseq;    /* Received out of sequence segments. */

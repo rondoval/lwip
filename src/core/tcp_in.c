@@ -894,6 +894,9 @@ tcp_process(struct tcp_pcb *pcb)
           rseg = pcb->unsent;
           LWIP_ASSERT("no segment to free", rseg != NULL);
           pcb->unsent = rseg->next;
+          if (pcb->unsent == NULL) {
+            pcb->unsent_tail = NULL;
+          }
         } else {
           pcb->unacked = rseg->next;
         }
@@ -1295,6 +1298,9 @@ tcp_receive(struct tcp_pcb *pcb)
          ->unsent list after a retransmission, so these segments may
          in fact have been sent once. */
       pcb->unsent = tcp_free_acked_segments(pcb, pcb->unsent, "unsent", pcb->unacked);
+      if (pcb->unsent == NULL) {
+        pcb->unsent_tail = NULL;
+      }
 
       /* If there's nothing left to acknowledge, stop the retransmit
          timer, otherwise reset it to start again */

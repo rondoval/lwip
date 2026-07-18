@@ -143,6 +143,25 @@ tcp_route(const struct tcp_pcb *pcb, const ip_addr_t *src, const ip_addr_t *dst)
   }
 }
 
+#if TCP_UNSENT_TAIL_DBGCHECK
+/** Verify pcb->unsent_tail caches the last node of pcb->unsent
+    (NULL when the queue is empty). Walks the whole queue: debug only. */
+static void
+tcp_unsent_tail_dbgcheck(const struct tcp_pcb *pcb)
+{
+  struct tcp_seg *last = pcb->unsent;
+  if (last != NULL) {
+    while (last->next != NULL) {
+      last = last->next;
+    }
+  }
+  LWIP_ASSERT("pcb->unsent_tail does not match the tail of pcb->unsent",
+              pcb->unsent_tail == last);
+}
+#else /* TCP_UNSENT_TAIL_DBGCHECK */
+#define tcp_unsent_tail_dbgcheck(pcb)
+#endif /* TCP_UNSENT_TAIL_DBGCHECK */
+
 /**
  * Create a TCP segment with prefilled header.
  *
@@ -475,14 +494,16 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
    * pos records progress as data is segmented.
    */
 
+  tcp_unsent_tail_dbgcheck(pcb);
+
   /* Find the tail of the unsent queue. */
   if (pcb->unsent != NULL) {
     u16_t space;
     u16_t unsent_optlen;
 
-    /* @todo: this could be sped up by keeping last_unsent in the pcb */
-    for (last_unsent = pcb->unsent; last_unsent->next != NULL;
-         last_unsent = last_unsent->next);
+    last_unsent = pcb->unsent_tail;
+    LWIP_ASSERT("tcp_write: pcb->unsent_tail is not the tail of pcb->unsent",
+                (last_unsent != NULL) && (last_unsent->next == NULL));
 
     /* Usable space at the end of the last unsent segment */
     unsent_optlen = LWIP_TCP_OPT_LENGTH_SEGMENT(last_unsent->flags, pcb);
@@ -775,6 +796,12 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
   } else {
     last_unsent->next = queue;
   }
+  if (queue != NULL) {
+    /* seg is the last segment created in phase 3 */
+    LWIP_ASSERT("tcp_write: valid queue tail",
+                (seg != NULL) && (seg->next == NULL));
+    pcb->unsent_tail = seg;
+  }
 
   /*
    * Finally update the pcb state.
@@ -795,6 +822,7 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
     TCPH_SET_FLAG(seg->tcphdr, TCP_PSH);
   }
 
+  tcp_unsent_tail_dbgcheck(pcb);
   return ERR_OK;
 memerr:
   tcp_set_flags(pcb, TF_NAGLEMEMERR);
@@ -972,6 +1000,10 @@ tcp_split_unsent_seg(struct tcp_pcb *pcb, u16_t split)
   /* Finally insert remainder into queue after split (which stays head) */
   seg->next = useg->next;
   useg->next = seg;
+  if (seg->next == NULL) {
+    /* the remainder is the new last segment on the unsent queue */
+    pcb->unsent_tail = seg;
+  }
 
 #if TCP_OVERSIZE
   /* If remainder is last segment on the unsent, ensure we clear the oversize amount
@@ -981,6 +1013,7 @@ tcp_split_unsent_seg(struct tcp_pcb *pcb, u16_t split)
   }
 #endif /* TCP_OVERSIZE */
 
+  tcp_unsent_tail_dbgcheck(pcb);
   return ERR_OK;
 memerr:
   TCP_STATS_INC(tcp.memerr);
@@ -1006,11 +1039,13 @@ tcp_send_fin(struct tcp_pcb *pcb)
 {
   LWIP_ASSERT("tcp_send_fin: invalid pcb", pcb != NULL);
 
+  tcp_unsent_tail_dbgcheck(pcb);
+
   /* first, try to add the fin to the last unsent segment */
   if (pcb->unsent != NULL) {
-    struct tcp_seg *last_unsent;
-    for (last_unsent = pcb->unsent; last_unsent->next != NULL;
-         last_unsent = last_unsent->next);
+    struct tcp_seg *last_unsent = pcb->unsent_tail;
+    LWIP_ASSERT("tcp_send_fin: pcb->unsent_tail is not the tail of pcb->unsent",
+                (last_unsent != NULL) && (last_unsent->next == NULL));
 
     if ((TCPH_FLAGS(last_unsent->tcphdr) & (TCP_SYN | TCP_FIN | TCP_RST)) == 0) {
       /* no SYN/FIN/RST flag in the header, we can add the FIN flag */
@@ -1043,6 +1078,8 @@ tcp_enqueue_flags(struct tcp_pcb *pcb, u8_t flags)
   LWIP_ASSERT("tcp_enqueue_flags: need either TCP_SYN or TCP_FIN in flags (programmer violates API)",
               (flags & (TCP_SYN | TCP_FIN)) != 0);
   LWIP_ASSERT("tcp_enqueue_flags: invalid pcb", pcb != NULL);
+
+  tcp_unsent_tail_dbgcheck(pcb);
 
   LWIP_DEBUGF(TCP_QLEN_DEBUG, ("tcp_enqueue_flags: queuelen: %"U16_F"\n", (u16_t)pcb->snd_queuelen));
 
@@ -1104,10 +1141,11 @@ tcp_enqueue_flags(struct tcp_pcb *pcb, u8_t flags)
   if (pcb->unsent == NULL) {
     pcb->unsent = seg;
   } else {
-    struct tcp_seg *useg;
-    for (useg = pcb->unsent; useg->next != NULL; useg = useg->next);
-    useg->next = seg;
+    LWIP_ASSERT("tcp_enqueue_flags: pcb->unsent_tail is not the tail of pcb->unsent",
+                (pcb->unsent_tail != NULL) && (pcb->unsent_tail->next == NULL));
+    pcb->unsent_tail->next = seg;
   }
+  pcb->unsent_tail = seg;
 #if TCP_OVERSIZE
   /* The new unsent tail has no space */
   pcb->unsent_oversize = 0;
@@ -1130,6 +1168,7 @@ tcp_enqueue_flags(struct tcp_pcb *pcb, u8_t flags)
                 pcb->unacked != NULL || pcb->unsent != NULL);
   }
 
+  tcp_unsent_tail_dbgcheck(pcb);
   return ERR_OK;
 }
 
@@ -1255,6 +1294,8 @@ tcp_output(struct tcp_pcb *pcb)
   LWIP_ASSERT("don't call tcp_output for listen-pcbs",
               pcb->state != LISTEN);
 
+  tcp_unsent_tail_dbgcheck(pcb);
+
   /* First, check if we are invoked by the TCP input processing
      code. If so, we do not output anything. Instead, we rely on the
      input processing code to call us when input processing is done
@@ -1371,6 +1412,9 @@ tcp_output(struct tcp_pcb *pcb)
     seg->oversize_left = 0;
 #endif /* TCP_OVERSIZE_DBGCHECK */
     pcb->unsent = seg->next;
+    if (pcb->unsent == NULL) {
+      pcb->unsent_tail = NULL;
+    }
     if (pcb->state != SYN_SENT) {
       tcp_clear_flags(pcb, TF_ACK_DELAY | TF_ACK_NOW);
     }
@@ -1658,6 +1702,10 @@ tcp_rexmit_rto_prepare(struct tcp_pcb *pcb)
   }
   /* concatenate unsent queue after unacked queue */
   seg->next = pcb->unsent;
+  if (pcb->unsent == NULL) {
+    /* the last unacked segment becomes the new unsent tail */
+    pcb->unsent_tail = seg;
+  }
 #if TCP_OVERSIZE_DBGCHECK
   /* if last unsent changed, we need to update unsent_oversize */
   if (pcb->unsent == NULL) {
@@ -1676,6 +1724,7 @@ tcp_rexmit_rto_prepare(struct tcp_pcb *pcb)
   /* Don't take any RTT measurements after retransmitting. */
   pcb->rttest = 0;
 
+  tcp_unsent_tail_dbgcheck(pcb);
   return ERR_OK;
 }
 
@@ -1756,6 +1805,10 @@ tcp_rexmit(struct tcp_pcb *pcb)
   }
   seg->next = *cur_seg;
   *cur_seg = seg;
+  if (seg->next == NULL) {
+    /* the retransmitted segment is the new last segment on unsent */
+    pcb->unsent_tail = seg;
+  }
 #if TCP_OVERSIZE
   if (seg->next == NULL) {
     /* the retransmitted segment is last in unsent, so reset unsent_oversize */
@@ -1774,6 +1827,7 @@ tcp_rexmit(struct tcp_pcb *pcb)
   MIB2_STATS_INC(mib2.tcpretranssegs);
   /* No need to call tcp_output: we are always called from tcp_input()
      and thus tcp_output directly returns. */
+  tcp_unsent_tail_dbgcheck(pcb);
   return ERR_OK;
 }
 
