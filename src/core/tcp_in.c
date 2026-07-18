@@ -1300,6 +1300,11 @@ tcp_receive(struct tcp_pcb *pcb)
       pcb->unsent = tcp_free_acked_segments(pcb, pcb->unsent, "unsent", pcb->unacked);
       if (pcb->unsent == NULL) {
         pcb->unsent_tail = NULL;
+        /* The ACK may have freed requeued segments a window-limited peer had
+           in fact received before the retransmission: with nothing left to
+           send, a running persist timer must be stopped (tcp_slowtmr asserts
+           on persist_backoff > 0 with an empty unsent queue). */
+        pcb->persist_backoff = 0;
       }
 
       /* If there's nothing left to acknowledge, stop the retransmit
