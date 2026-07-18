@@ -505,10 +505,22 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
     LWIP_ASSERT("tcp_write: pcb->unsent_tail is not the tail of pcb->unsent",
                 (last_unsent != NULL) && (last_unsent->next == NULL));
 
-    /* Usable space at the end of the last unsent segment */
-    unsent_optlen = LWIP_TCP_OPT_LENGTH_SEGMENT(last_unsent->flags, pcb);
-    LWIP_ASSERT("mss_local is too small", mss_local >= last_unsent->len + unsent_optlen);
-    space = mss_local - (last_unsent->len + unsent_optlen);
+    if (lwip_ntohl(last_unsent->tcphdr->seqno) + last_unsent->len != pcb->snd_lbb) {
+      /* The tail is a segment requeued for retransmission by tcp_rexmit()
+         or tcp_rexmit_rto_prepare(): it does not end at snd_lbb, so more
+         recently buffered data (in flight on the unacked queue, or already
+         acked) follows it in sequence space. Appending new data here would
+         assign the new bytes sequence numbers that are already in use,
+         silently corrupting the stream. Queue new data as fresh segments
+         instead: space == 0 disables phase 2, and the requeue paths have
+         reset unsent_oversize, keeping phase 1 inert. */
+      space = 0;
+    } else {
+      /* Usable space at the end of the last unsent segment */
+      unsent_optlen = LWIP_TCP_OPT_LENGTH_SEGMENT(last_unsent->flags, pcb);
+      LWIP_ASSERT("mss_local is too small", mss_local >= last_unsent->len + unsent_optlen);
+      space = mss_local - (last_unsent->len + unsent_optlen);
+    }
 
     /*
      * Phase 1: Copy data directly into an oversized pbuf.
@@ -1047,8 +1059,13 @@ tcp_send_fin(struct tcp_pcb *pcb)
     LWIP_ASSERT("tcp_send_fin: pcb->unsent_tail is not the tail of pcb->unsent",
                 (last_unsent != NULL) && (last_unsent->next == NULL));
 
-    if ((TCPH_FLAGS(last_unsent->tcphdr) & (TCP_SYN | TCP_FIN | TCP_RST)) == 0) {
-      /* no SYN/FIN/RST flag in the header, we can add the FIN flag */
+    if (((TCPH_FLAGS(last_unsent->tcphdr) & (TCP_SYN | TCP_FIN | TCP_RST)) == 0) &&
+        (lwip_ntohl(last_unsent->tcphdr->seqno) + last_unsent->len == pcb->snd_lbb)) {
+      /* no SYN/FIN/RST flag in the header and the segment ends at snd_lbb
+         (i.e. it is not a segment requeued for retransmission with more
+         recently buffered data following it in sequence space, where the
+         piggybacked FIN would sit at an already-used sequence number and
+         truncate the stream), so we can add the FIN flag */
       TCPH_SET_FLAG(last_unsent->tcphdr, TCP_FIN);
       tcp_set_flags(pcb, TF_FIN);
       return ERR_OK;
