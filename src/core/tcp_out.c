@@ -516,10 +516,30 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
          reset unsent_oversize, keeping phase 1 inert. */
       space = 0;
     } else {
-      /* Usable space at the end of the last unsent segment */
+      u32_t tail_need;
       unsent_optlen = LWIP_TCP_OPT_LENGTH_SEGMENT(last_unsent->flags, pcb);
-      LWIP_ASSERT("mss_local is too small", mss_local >= last_unsent->len + unsent_optlen);
-      space = mss_local - (last_unsent->len + unsent_optlen);
+      tail_need = (u32_t)last_unsent->len + unsent_optlen;
+#if TCP_OVERSIZE
+      tail_need += pcb->unsent_oversize;
+#endif /* TCP_OVERSIZE */
+      if (tail_need > mss_local) {
+        /* mss_local is not monotonic: while snd_wnd_max is 0 or 1, the
+           snd_wnd_max / 2 term truncates to zero and mss_local falls back
+           to the full pcb->mss, so segments are built with len + oversize
+           up to that. Once the peer announces a small window, the ratchet
+           undercuts the fallback and this honestly-built tail exceeds the
+           current bound. Retire the tail's recorded spare room and queue
+           new data as fresh segments sized to the current mss_local. */
+        space = 0;
+#if TCP_OVERSIZE
+#if TCP_OVERSIZE_DBGCHECK
+        last_unsent->oversize_left = 0;
+#endif /* TCP_OVERSIZE_DBGCHECK */
+        pcb->unsent_oversize = 0;
+#endif /* TCP_OVERSIZE */
+      } else {
+        space = mss_local - (last_unsent->len + unsent_optlen);
+      }
     }
 
     /*
