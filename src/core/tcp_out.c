@@ -533,6 +533,12 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
         space = 0;
 #if TCP_OVERSIZE
 #if TCP_OVERSIZE_DBGCHECK
+        if (pcb->unsent_oversize != 0) {
+          LWIP_PLATFORM_DIAG(("tcp_write OVZ-RETIRE: len=%"U16_F" opt=%"U16_F" ovz=%"U16_F
+                              " ml=%"U16_F" mss=%"U16_F" swm=%"TCPWNDSIZE_F"\n",
+                              last_unsent->len, unsent_optlen, pcb->unsent_oversize,
+                              mss_local, pcb->mss, pcb->snd_wnd_max));
+        }
         last_unsent->oversize_left = 0;
 #endif /* TCP_OVERSIZE_DBGCHECK */
         pcb->unsent_oversize = 0;
@@ -551,6 +557,33 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
      */
 #if TCP_OVERSIZE
 #if TCP_OVERSIZE_DBGCHECK
+    /* Emit the full sender state before the oversize asserts below can
+       halt, so a single field occurrence pinpoints the broken invariant. */
+    if ((pcb->unsent_oversize != last_unsent->oversize_left) ||
+        ((pcb->unsent_oversize > 0) && (pcb->unsent_oversize > space))) {
+      struct pbuf *dq = last_unsent->p;
+      while (dq != NULL && dq->next != NULL) {
+        dq = dq->next;
+      }
+      LWIP_PLATFORM_DIAG(("tcp_write OVZ-EVIDENCE: ovz=%"U16_F" shadow=%"U16_F" space=%"U16_F
+                          " ml=%"U16_F" mss=%"U16_F" swm=%"TCPWNDSIZE_F" swnd=%"TCPWNDSIZE_F
+                          " tlen=%"U16_F" tsegfl=0x%"X16_F" thdrfl=0x%"X16_F" tseq=%"U32_F
+                          " lbb=%"U32_F" nxt=%"U32_F" lack=%"U32_F" atlbb=%d state=%d"
+                          " pcbfl=0x%"X16_F" qlen=%"U16_F" plen=%"U16_F" ptot=%"U16_F
+                          " pref=%"U16_F" ualen=%"U16_F"\n",
+                          pcb->unsent_oversize, last_unsent->oversize_left, space,
+                          mss_local, pcb->mss, pcb->snd_wnd_max, pcb->snd_wnd,
+                          last_unsent->len, (u16_t)last_unsent->flags,
+                          (u16_t)TCPH_FLAGS(last_unsent->tcphdr),
+                          lwip_ntohl(last_unsent->tcphdr->seqno),
+                          pcb->snd_lbb, pcb->snd_nxt, pcb->lastack,
+                          (int)(lwip_ntohl(last_unsent->tcphdr->seqno) + last_unsent->len == pcb->snd_lbb),
+                          (int)pcb->state, (u16_t)pcb->flags, pcb->snd_queuelen,
+                          (u16_t)(dq != NULL ? dq->len : 0),
+                          (u16_t)(dq != NULL ? dq->tot_len : 0),
+                          (u16_t)(dq != NULL ? dq->ref : 0),
+                          (u16_t)(pcb->unacked != NULL ? pcb->unacked->len : 0)));
+    }
     /* check that pcb->unsent_oversize matches last_unsent->oversize_left */
     LWIP_ASSERT("unsent_oversize mismatch (pcb vs. last_unsent)",
                 pcb->unsent_oversize == last_unsent->oversize_left);
