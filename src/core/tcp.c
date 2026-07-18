@@ -1255,7 +1255,13 @@ tcp_slowtmr_start:
               }
               /* snd_wnd not fully closed, split unsent head and fill window */
             } else {
-              if (tcp_split_unsent_seg(pcb, (u16_t)pcb->snd_wnd) == ERR_OK) {
+              /* TCPWND_MIN16, not a bare u16_t cast: with window scaling a
+                 reopened window that is a multiple of 65536 truncates to 0
+                 and trips tcp_split_unsent_seg's "Can't split segment into
+                 length 0" assert (persist survives a window-opening update
+                 made while unsent was empty, so the stale timer can fire
+                 against a wide-open window). */
+              if (tcp_split_unsent_seg(pcb, TCPWND_MIN16(pcb->snd_wnd)) == ERR_OK) {
                 if (tcp_output(pcb) == ERR_OK) {
                   /* sending will cancel persist timer, else retry with current slot */
                   next_slot = 0;
