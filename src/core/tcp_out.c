@@ -1786,7 +1786,18 @@ tcp_rexmit_rto_prepare(struct tcp_pcb *pcb)
        in every build. TCP_OVERSIZE_DBGCHECK builds used to reload it from
        the segment's (zeroed) oversize_left here while builds without the
        shadow relied on the drained queue having left it at zero - so a
-       stale value survived a requeue only in non-DBGCHECK builds. */
+       stale value survived a requeue only in non-DBGCHECK builds. The
+       counter must already be zero here (every path that drains unsent
+       resets it); if the reset ever repairs a live value, that is an
+       unfound bug upstream of this point - report it rather than heal
+       silently. */
+#if TCP_OVERSIZE_DBGCHECK
+    if (pcb->unsent_oversize != 0) {
+      LWIP_PLATFORM_DIAG(("tcp_rexmit_rto_prepare OVZ-STALE: ovz=%"U16_F
+                          " repaired at requeue (report this state)\n",
+                          pcb->unsent_oversize));
+    }
+#endif /* TCP_OVERSIZE_DBGCHECK */
     pcb->unsent_oversize = 0;
 #endif /* TCP_OVERSIZE */
   } else {
