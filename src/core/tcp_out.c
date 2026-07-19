@@ -1742,13 +1742,15 @@ tcp_rexmit_rto_prepare(struct tcp_pcb *pcb)
   if (pcb->unsent == NULL) {
     /* the last unacked segment becomes the new unsent tail */
     pcb->unsent_tail = seg;
+#if TCP_OVERSIZE
+    /* A transmitted segment carries no usable tail room: reset the counter
+       in every build. TCP_OVERSIZE_DBGCHECK builds used to reload it from
+       the segment's (zeroed) oversize_left here while builds without the
+       shadow relied on the drained queue having left it at zero - so a
+       stale value survived a requeue only in non-DBGCHECK builds. */
+    pcb->unsent_oversize = 0;
+#endif /* TCP_OVERSIZE */
   }
-#if TCP_OVERSIZE_DBGCHECK
-  /* if last unsent changed, we need to update unsent_oversize */
-  if (pcb->unsent == NULL) {
-    pcb->unsent_oversize = seg->oversize_left;
-  }
-#endif /* TCP_OVERSIZE_DBGCHECK */
   /* unsent queue is the concatenated queue (of unacked, unsent) */
   pcb->unsent = pcb->unacked;
   /* unacked queue is now empty */
