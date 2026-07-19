@@ -1737,9 +1737,15 @@ tcp_rexmit_rto_prepare(struct tcp_pcb *pcb)
     LWIP_DEBUGF(TCP_RTO_DEBUG, ("tcp_rexmit_rto: segment busy\n"));
     return ERR_VAL;
   }
-  /* concatenate unsent queue after unacked queue */
-  seg->next = pcb->unsent;
+  /* Merge the unacked queue into the unsent queue by sequence number.
+     A plain concatenation (unacked in front) is not enough: a fast-
+     retransmitted segment that a closed window kept on unsent can carry a
+     LOWER seqno than segments still in flight, and putting the in-flight
+     segments in front would bury the very data the peer is waiting for
+     behind window-blocked heads - a permanent sender stall. Both queues
+     are sorted, so a linear merge restores global order. */
   if (pcb->unsent == NULL) {
+    pcb->unsent = pcb->unacked;
     /* the last unacked segment becomes the new unsent tail */
     pcb->unsent_tail = seg;
 #if TCP_OVERSIZE
@@ -1750,9 +1756,30 @@ tcp_rexmit_rto_prepare(struct tcp_pcb *pcb)
        stale value survived a requeue only in non-DBGCHECK builds. */
     pcb->unsent_oversize = 0;
 #endif /* TCP_OVERSIZE */
+  } else {
+    struct tcp_seg *una = pcb->unacked;
+    struct tcp_seg *uns = pcb->unsent;
+    struct tcp_seg **mp = &pcb->unsent;
+    while (una != NULL && uns != NULL) {
+      if (TCP_SEQ_LT(lwip_ntohl(una->tcphdr->seqno), lwip_ntohl(uns->tcphdr->seqno))) {
+        *mp = una;
+        una = una->next;
+      } else {
+        *mp = uns;
+        uns = uns->next;
+      }
+      mp = &((*mp)->next);
+    }
+    *mp = (una != NULL) ? una : uns;
+    if (una != NULL) {
+      /* the unacked tail sorts above the old unsent tail: new queue tail,
+         and a transmitted segment carries no usable tail room */
+      pcb->unsent_tail = seg;
+#if TCP_OVERSIZE
+      pcb->unsent_oversize = 0;
+#endif /* TCP_OVERSIZE */
+    }
   }
-  /* unsent queue is the concatenated queue (of unacked, unsent) */
-  pcb->unsent = pcb->unacked;
   /* unacked queue is now empty */
   pcb->unacked = NULL;
 
