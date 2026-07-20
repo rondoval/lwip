@@ -1255,13 +1255,41 @@ tcp_slowtmr_start:
               }
               /* snd_wnd not fully closed, split unsent head and fill window */
             } else {
-              /* TCPWND_MIN16, not a bare u16_t cast: with window scaling a
+              u32_t split_len = pcb->snd_wnd;
+              u32_t acked_prefix = 0;
+              struct tcp_seg *useg = pcb->unsent;
+              /* An RTO can requeue a partially-acked segment as the unsent
+                 head (lastack inside it). Measure the split from lastack,
+                 not from the segment start, so the piece sent below carries
+                 snd_wnd of UNACKED data: a split within the acked prefix
+                 would create a fully-acked head no window ever passes and
+                 no ACK ever frees - a permanent sender stall. The prefix
+                 rides along as a legal duplicate and the next ACK frees it.
+                 TCPWND_MIN16, not a bare u16_t cast: with window scaling a
                  reopened window that is a multiple of 65536 truncates to 0
                  and trips tcp_split_unsent_seg's "Can't split segment into
                  length 0" assert (persist survives a window-opening update
                  made while unsent was empty, so the stale timer can fire
                  against a wide-open window). */
-              if (tcp_split_unsent_seg(pcb, TCPWND_MIN16(pcb->snd_wnd)) == ERR_OK) {
+              if (useg != NULL &&
+                  TCP_SEQ_LT(lwip_ntohl(useg->tcphdr->seqno), pcb->lastack)) {
+                acked_prefix = pcb->lastack - lwip_ntohl(useg->tcphdr->seqno);
+                split_len += acked_prefix;
+              }
+              /* A segment can never exceed mss, which tcp_split_unsent_seg
+                 asserts - and pcb->mss is not monotonic: tcp_eff_send_mss()
+                 can shrink it below a tail built while it was larger, the
+                 same non-monotonicity tcp_write copes with when mss_local
+                 undercuts an honestly-built tail. An unclamped snd_wnd above
+                 the shrunken mss would halt there, so bound it here.
+                 Only split if the piece still carries unacked data past the
+                 prefix: a split inside the prefix would produce the
+                 fully-acked head that stalls the sender permanently. */
+              if (split_len > pcb->mss) {
+                split_len = pcb->mss;
+              }
+              if (split_len > acked_prefix &&
+                  tcp_split_unsent_seg(pcb, TCPWND_MIN16(split_len)) == ERR_OK) {
                 if (tcp_output(pcb) == ERR_OK) {
                   /* sending will cancel persist timer, else retry with current slot */
                   next_slot = 0;

@@ -1305,6 +1305,20 @@ tcp_receive(struct tcp_pcb *pcb)
            send, a running persist timer must be stopped (tcp_slowtmr asserts
            on persist_backoff > 0 with an empty unsent queue). */
         pcb->persist_backoff = 0;
+      } else if (TCP_SEQ_LT(lwip_ntohl(pcb->unsent->tcphdr->seqno), pcb->lastack)) {
+        /* The ACK ends inside the (requeued) unsent head: split off the
+           acked prefix and free it, so the head starts at lastack again
+           and its already-acked bytes stop occupying the send queue. Only
+           when the prefix fits a segment - tcp_split_unsent_seg asserts
+           split <= mss, and pcb->mss can have shrunk below an oversized
+           requeued head; when it doesn't fit (or on split memerr) leave the
+           head whole, tcp_output's window check copes with a partially-acked
+           head. */
+        u32_t acked_prefix = pcb->lastack - lwip_ntohl(pcb->unsent->tcphdr->seqno);
+        if (acked_prefix <= pcb->mss &&
+            tcp_split_unsent_seg(pcb, (u16_t)acked_prefix) == ERR_OK) {
+          pcb->unsent = tcp_free_acked_segments(pcb, pcb->unsent, "unsent", pcb->unacked);
+        }
       }
 
       /* If there's nothing left to acknowledge, stop the retransmit
