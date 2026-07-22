@@ -2824,6 +2824,13 @@ mdns_resp_init(void)
 #else
   mdns_pcb->ttl = MDNS_IP_TTL;
 #endif
+#if SO_REUSE
+  /* lwip-amiga: let other local pcbs share port 5353 (the `mdns` CLI listens
+   * beside the responder). udp_bind only permits the second bind when BOTH
+   * pcbs carry SOF_REUSEADDR, and SO_REUSE_RXTOALL then feeds the multicast
+   * to each of them. */
+  ip_set_option(mdns_pcb, SOF_REUSEADDR);
+#endif
   res = udp_bind(mdns_pcb, IP_ANY_TYPE, LWIP_IANA_PORT_MDNS);
   LWIP_UNUSED_ARG(res); /* in case of LWIP_NOASSERT */
   LWIP_ASSERT("Failed to bind pcb", res == ERR_OK);
