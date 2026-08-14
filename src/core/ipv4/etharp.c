@@ -492,30 +492,57 @@ etharp_update_arp_entry(struct netif *netif, const ip4_addr_t *ipaddr, struct et
 }
 
 #if ETHARP_SUPPORT_STATIC_ENTRIES
-/** Add a new static entry to the ARP table. If an entry exists for the
+/** Add a new entry to the ARP table manually. If an entry exists for the
  * specified IP address, this entry is overwritten.
  * If packets are queued for the specified IP address, they are sent out.
+ * The netif is selected via ip4_route().
  *
- * @param ipaddr IP address for the new static entry
- * @param ethaddr ethernet address for the new static entry
- * @return See return values of etharp_add_static_entry
+ * @param ipaddr IP address for the new entry
+ * @param ethaddr ethernet address for the new entry
+ * @param static_entry 1 to create a static (permanent) entry, 0 to create
+ *        a normal dynamic entry that ages out like a learned one
+ * @return ERR_OK: entry added
+ *         ERR_RTE: no netif routes to ipaddr
+ *         ERR_MEM: table full
+ *         ERR_ARG: ipaddr is not a valid unicast address
+ *         ERR_VAL: a static entry for ipaddr exists (dynamic add refused)
  */
 err_t
-etharp_add_static_entry(const ip4_addr_t *ipaddr, struct eth_addr *ethaddr)
+etharp_add_entry(const ip4_addr_t *ipaddr, struct eth_addr *ethaddr, u8_t static_entry)
 {
   struct netif *netif;
+  u8_t flags;
   LWIP_ASSERT_CORE_LOCKED();
-  LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_add_static_entry: %"U16_F".%"U16_F".%"U16_F".%"U16_F" - %02"X16_F":%02"X16_F":%02"X16_F":%02"X16_F":%02"X16_F":%02"X16_F"\n",
+  LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_add_entry: %"U16_F".%"U16_F".%"U16_F".%"U16_F" - %02"X16_F":%02"X16_F":%02"X16_F":%02"X16_F":%02"X16_F":%02"X16_F" static %"U16_F"\n",
               ip4_addr1_16(ipaddr), ip4_addr2_16(ipaddr), ip4_addr3_16(ipaddr), ip4_addr4_16(ipaddr),
               (u16_t)ethaddr->addr[0], (u16_t)ethaddr->addr[1], (u16_t)ethaddr->addr[2],
-              (u16_t)ethaddr->addr[3], (u16_t)ethaddr->addr[4], (u16_t)ethaddr->addr[5]));
+              (u16_t)ethaddr->addr[3], (u16_t)ethaddr->addr[4], (u16_t)ethaddr->addr[5],
+              (u16_t)static_entry));
 
   netif = ip4_route(ipaddr);
   if (netif == NULL) {
     return ERR_RTE;
   }
 
-  return etharp_update_arp_entry(netif, ipaddr, ethaddr, ETHARP_FLAG_TRY_HARD | ETHARP_FLAG_STATIC_ENTRY);
+  flags = ETHARP_FLAG_TRY_HARD;
+  if (static_entry) {
+    flags |= ETHARP_FLAG_STATIC_ENTRY;
+  }
+  return etharp_update_arp_entry(netif, ipaddr, ethaddr, flags);
+}
+
+/** Add a new static entry to the ARP table. If an entry exists for the
+ * specified IP address, this entry is overwritten.
+ * If packets are queued for the specified IP address, they are sent out.
+ *
+ * @param ipaddr IP address for the new static entry
+ * @param ethaddr ethernet address for the new static entry
+ * @return See return values of etharp_add_entry
+ */
+err_t
+etharp_add_static_entry(const ip4_addr_t *ipaddr, struct eth_addr *ethaddr)
+{
+  return etharp_add_entry(ipaddr, ethaddr, 1);
 }
 
 /** Remove a static entry from the ARP table previously added with a call to
@@ -550,6 +577,32 @@ etharp_remove_static_entry(const ip4_addr_t *ipaddr)
   return ERR_OK;
 }
 #endif /* ETHARP_SUPPORT_STATIC_ENTRIES */
+
+/** Remove an entry from the ARP table regardless of its state (static,
+ * stable or pending). Queued packets of a pending entry are freed.
+ *
+ * @param ipaddr IP address of the entry to remove
+ * @return ERR_OK: entry removed
+ *         ERR_MEM: entry wasn't found
+ */
+err_t
+etharp_remove_entry(const ip4_addr_t *ipaddr)
+{
+  s16_t i;
+  LWIP_ASSERT_CORE_LOCKED();
+  LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_remove_entry: %"U16_F".%"U16_F".%"U16_F".%"U16_F"\n",
+              ip4_addr1_16(ipaddr), ip4_addr2_16(ipaddr), ip4_addr3_16(ipaddr), ip4_addr4_16(ipaddr)));
+
+  i = etharp_find_entry(ipaddr, ETHARP_FLAG_FIND_ONLY, NULL);
+  /* bail out if no entry could be found */
+  if (i < 0) {
+    return (err_t)i;
+  }
+
+  /* entry found, free it */
+  etharp_free_entry(i);
+  return ERR_OK;
+}
 
 /**
  * Remove all ARP table entries of the specified netif.
@@ -620,6 +673,48 @@ etharp_get_entry(size_t i, ip4_addr_t **ipaddr, struct netif **netif, struct eth
     *ipaddr  = &arp_table[i].ipaddr;
     *netif   = arp_table[i].netif;
     *eth_ret = &arp_table[i].ethaddr;
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+/**
+ * Possibility to iterate over all occupied ARP table entries, including
+ * pending ones, exposing entry state and age.
+ *
+ * @param i entry number, 0 to ARP_TABLE_SIZE
+ * @param ipaddr return value: IP address
+ * @param netif return value: points to interface
+ * @param eth_ret return value: ETH address (not yet valid for pending entries)
+ * @param flags return value: ETHARP_ENTRY_* flags for this entry
+ * @param ctime return value: age of the entry, in ARP timer ticks
+ * @return 1 on valid index, 0 otherwise
+ */
+int
+etharp_get_entry_info(size_t i, ip4_addr_t **ipaddr, struct netif **netif,
+                      struct eth_addr **eth_ret, u8_t *flags, u16_t *ctime)
+{
+  LWIP_ASSERT("ipaddr != NULL", ipaddr != NULL);
+  LWIP_ASSERT("netif != NULL", netif != NULL);
+  LWIP_ASSERT("eth_ret != NULL", eth_ret != NULL);
+  LWIP_ASSERT("flags != NULL", flags != NULL);
+  LWIP_ASSERT("ctime != NULL", ctime != NULL);
+
+  if ((i < ARP_TABLE_SIZE) && (arp_table[i].state != ETHARP_STATE_EMPTY)) {
+    *ipaddr  = &arp_table[i].ipaddr;
+    *netif   = arp_table[i].netif;
+    *eth_ret = &arp_table[i].ethaddr;
+    *flags   = 0;
+    if (arp_table[i].state == ETHARP_STATE_PENDING) {
+      *flags |= ETHARP_ENTRY_PENDING;
+    }
+#if ETHARP_SUPPORT_STATIC_ENTRIES
+    if (arp_table[i].state == ETHARP_STATE_STATIC) {
+      *flags |= ETHARP_ENTRY_STATIC;
+    }
+#endif /* ETHARP_SUPPORT_STATIC_ENTRIES */
+    *ctime   = arp_table[i].ctime;
     return 1;
   } else {
     return 0;

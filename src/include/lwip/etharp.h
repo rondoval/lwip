@@ -78,6 +78,13 @@ void etharp_tmr(void);
 ssize_t etharp_find_addr(struct netif *netif, const ip4_addr_t *ipaddr,
          struct eth_addr **eth_ret, const ip4_addr_t **ip_ret);
 int etharp_get_entry(size_t i, ip4_addr_t **ipaddr, struct netif **netif, struct eth_addr **eth_ret);
+
+/** Entry-info flags returned by etharp_get_entry_info() */
+#define ETHARP_ENTRY_PENDING 0x01 /* still resolving; eth_ret not yet valid */
+#define ETHARP_ENTRY_STATIC  0x02 /* pinned by etharp_add_static_entry(); never expires */
+int etharp_get_entry_info(size_t i, ip4_addr_t **ipaddr, struct netif **netif,
+                          struct eth_addr **eth_ret, u8_t *flags, u16_t *ctime);
+err_t etharp_remove_entry(const ip4_addr_t *ipaddr);
 err_t etharp_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ipaddr);
 err_t etharp_query(struct netif *netif, const ip4_addr_t *ipaddr, struct pbuf *q);
 err_t etharp_request(struct netif *netif, const ip4_addr_t *ipaddr);
@@ -94,6 +101,7 @@ err_t etharp_acd_announce(struct netif *netif, const ip4_addr_t *ipaddr);
 #endif /* LWIP_ACD */
 
 #if ETHARP_SUPPORT_STATIC_ENTRIES
+err_t etharp_add_entry(const ip4_addr_t *ipaddr, struct eth_addr *ethaddr, u8_t static_entry);
 err_t etharp_add_static_entry(const ip4_addr_t *ipaddr, struct eth_addr *ethaddr);
 err_t etharp_remove_static_entry(const ip4_addr_t *ipaddr);
 #endif /* ETHARP_SUPPORT_STATIC_ENTRIES */
