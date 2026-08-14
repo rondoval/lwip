@@ -334,6 +334,17 @@ struct tcp_pcb {
 
   tcpwnd_size_t bytes_acked;
 
+#if LWIP_TCP_URG
+  /* TCP urgent data (fork addition, see LWIP_TCP_URG in opt.h). The stack
+     only parses, latches and emits; extraction and mark policy live in the
+     port, which reads rcv_up and clears TF_URG_RCV from its recv callback. */
+  u32_t snd_up;   /* TX: seqno one past the urgent byte (valid while TF_URG_SND) */
+  u32_t rcv_up;   /* RX: seqno of the most recent urgent byte */
+  u8_t urgflags;
+#define TF_URG_SND 0x01 /* snd_up armed; retired once ackno reaches it */
+#define TF_URG_RCV 0x02 /* rcv_up is a new mark the port has not consumed */
+#endif /* LWIP_TCP_URG */
+
   /* These are ordered by sequence number: */
   struct tcp_seg *unsent;   /* Unsent (queued) segments. */
   struct tcp_seg *unsent_tail; /* Last segment on the unsent queue,

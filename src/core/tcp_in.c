@@ -230,6 +230,9 @@ tcp_input(struct pbuf *p, struct netif *inp)
   seqno = tcphdr->seqno = lwip_ntohl(tcphdr->seqno);
   ackno = tcphdr->ackno = lwip_ntohl(tcphdr->ackno);
   tcphdr->wnd = lwip_ntohs(tcphdr->wnd);
+#if LWIP_TCP_URG
+  tcphdr->urgp = lwip_ntohs(tcphdr->urgp);
+#endif
 
   flags = TCPH_FLAGS(tcphdr);
   tcplen = p->tot_len;
@@ -1260,6 +1263,15 @@ tcp_receive(struct tcp_pcb *pcb)
       pcb->dupacks = 0;
       pcb->lastack = ackno;
 
+#if LWIP_TCP_URG
+      /* Retire the TX urgent pointer once the urgent byte is acked. Without
+         this, a connection outliving snd_up by 2 GiB of seqno space would
+         see TCP_SEQ_LT go false-positive and re-emit stale URG. */
+      if ((pcb->urgflags & TF_URG_SND) && TCP_SEQ_GEQ(ackno, pcb->snd_up)) {
+        pcb->urgflags &= (u8_t)~TF_URG_SND;
+      }
+#endif /* LWIP_TCP_URG */
+
       /* Update the congestion control variables (cwnd and
          ssthresh). */
       if (pcb->state >= ESTABLISHED) {
@@ -1402,6 +1414,21 @@ tcp_receive(struct tcp_pcb *pcb)
      (RFC 793, chapter 3.9, "SEGMENT ARRIVES" in states CLOSE-WAIT, CLOSING,
      LAST-ACK and TIME-WAIT: "Ignore the segment text.") */
   if ((tcplen > 0) && (pcb->state < CLOSE_WAIT)) {
+#if LWIP_TCP_URG
+    /* Latch an RX urgent mark at arrival, before any trimming: the
+       first-edge trim below rewrites the header seqno, but urgp counts
+       from the seqno as sent. urgp points one past the urgent byte (BSD
+       convention), so the byte itself sits at seqno + urgp - 1. Latest
+       mark wins; a stale mark from a retransmit is below everything the
+       port has seen and gets discarded there. */
+    if ((TCPH_FLAGS(inseg.tcphdr) & TCP_URG) && (inseg.tcphdr->urgp > 0)) {
+      u32_t mark = seqno + inseg.tcphdr->urgp - 1;
+      if (!(pcb->urgflags & TF_URG_RCV) || TCP_SEQ_GT(mark, pcb->rcv_up)) {
+        pcb->rcv_up = mark;
+        pcb->urgflags |= TF_URG_RCV;
+      }
+    }
+#endif /* LWIP_TCP_URG */
     /* This code basically does three things:
 
     +) If the incoming segment contains data that is the next

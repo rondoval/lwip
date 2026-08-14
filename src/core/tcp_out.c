@@ -887,6 +887,17 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
     TCPH_SET_FLAG(seg->tcphdr, TCP_PSH);
   }
 
+#if LWIP_TCP_URG
+  /* Arm the urgent pointer one past the last byte of this write (BSD
+     convention). Emission happens per transmission in tcp_output_segment —
+     segments split and retransmit after enqueue, so a per-segment flag set
+     here would go stale. snd_lbb was already advanced past this write. */
+  if (apiflags & TCP_WRITE_FLAG_URG) {
+    pcb->snd_up = pcb->snd_lbb;
+    pcb->urgflags |= TF_URG_SND;
+  }
+#endif /* LWIP_TCP_URG */
+
   tcp_unsent_tail_dbgcheck(pcb);
   return ERR_OK;
 memerr:
@@ -1607,6 +1618,24 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
   }
 
   pcb->rcv_ann_right_edge = pcb->rcv_nxt + pcb->rcv_ann_wnd;
+
+#if LWIP_TCP_URG
+  /* Urgent pointer, recomputed per transmission like ackno/wnd above (the
+     mark is pcb state; this segment may be a split or a retransmit). The
+     else arm actively clears URG — headers persist across retransmits, so
+     a stale bit must not outlive retirement (ACK past snd_up, tcp_in.c). */
+  {
+    u32_t seg_seqno = lwip_ntohl(seg->tcphdr->seqno);
+    if ((pcb->urgflags & TF_URG_SND) && TCP_SEQ_LT(seg_seqno, pcb->snd_up)) {
+      u32_t urgoff = pcb->snd_up - seg_seqno;
+      TCPH_SET_FLAG(seg->tcphdr, TCP_URG);
+      seg->tcphdr->urgp = lwip_htons((u16_t)LWIP_MIN(urgoff, 0xFFFF));
+    } else if (TCPH_FLAGS(seg->tcphdr) & TCP_URG) {
+      TCPH_UNSET_FLAG(seg->tcphdr, TCP_URG);
+      seg->tcphdr->urgp = 0;
+    }
+  }
+#endif /* LWIP_TCP_URG */
 
   /* Add any requested options.  NB MSS option is only set on SYN
      packets, so ignore it here */

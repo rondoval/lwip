@@ -72,6 +72,7 @@ enum tcp_state {
 /* Flags for "apiflags" parameter in tcp_write */
 #define TCP_WRITE_FLAG_COPY 0x01
 #define TCP_WRITE_FLAG_MORE 0x02
+#define TCP_WRITE_FLAG_URG  0x04 /* LWIP_TCP_URG: last byte of this write is urgent */
 
 #define TCP_PRIO_MIN    1
 #define TCP_PRIO_NORMAL 64

@@ -1329,6 +1329,18 @@
 #endif
 
 /**
+ * LWIP_TCP_URG==1: support TCP urgent data (fork addition). TX: a write
+ * flagged TCP_WRITE_FLAG_URG arms pcb->snd_up one past its last byte and
+ * every outgoing segment below snd_up carries URG + the urgent pointer
+ * (BSD convention: urgp counts to one past the urgent byte). RX: an
+ * arriving URG segment latches the urgent byte's seqno in pcb->rcv_up
+ * with TF_URG_RCV; extraction and all mark policy are the port's job.
+ */
+#if !defined LWIP_TCP_URG || defined __DOXYGEN__
+#define LWIP_TCP_URG                    0
+#endif
+
+/**
  * LWIP_TCP_MAX_SACK_NUM: The maximum number of SACK values to include in TCP segments.
  * Must be at least 1, but is only used if LWIP_TCP_SACK_OUT is enabled.
  * NOTE: Even though we never send more than 3 or 4 SACK ranges in a single segment
