@@ -1680,7 +1680,18 @@ tcp_receive(struct tcp_pcb *pcb)
 
 
         /* Acknowledge the segment(s). */
-        tcp_ack(pcb);
+#if LWIP_TCP_ACK_AGGREGATES
+        /* inseg.tcphdr->seqno is where this input found rcv_nxt (the front
+           trim above rewrites it), so the difference is everything that just
+           became deliverable: inseg plus whatever it released from ooseq. */
+        if ((u32_t)(pcb->rcv_nxt - inseg.tcphdr->seqno) > TCP_MSS) {
+          /* several full-sized segments' worth: the sender is owed an ACK now */
+          tcp_ack_now(pcb);
+        } else
+#endif /* LWIP_TCP_ACK_AGGREGATES */
+        {
+          tcp_ack(pcb);
+        }
 
 #if LWIP_TCP_SACK_OUT
         if (LWIP_TCP_SACK_VALID(pcb, 0)) {

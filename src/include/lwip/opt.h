@@ -1341,6 +1341,23 @@
 #endif
 
 /**
+ * LWIP_TCP_ACK_AGGREGATES==1: acknowledge at once when a single input advances
+ * rcv_nxt by more than TCP_MSS (fork addition). tcp_ack() counts segments, but
+ * RFC 5681 4.2 counts bytes — an ACK for at least every second full-sized
+ * segment, and an immediate one when a segment fills a gap. Two inputs are
+ * worth more than one segment:
+ *  - an aggregate a port coalesced from several wire segments before
+ *    tcp_input() (GRO/LRO). No peer sends a segment longer than TCP_MSS, the
+ *    most we ever advertise. Counted as one segment, a whole flight from the
+ *    sender earns no ACK, and its congestion window and send buffer wait for
+ *    the delayed-ACK timer or for the application to open the window;
+ *  - a retransmission that fills a hole and releases queued ooseq data.
+ */
+#if !defined LWIP_TCP_ACK_AGGREGATES || defined __DOXYGEN__
+#define LWIP_TCP_ACK_AGGREGATES         0
+#endif
+
+/**
  * LWIP_TCP_MAX_SACK_NUM: The maximum number of SACK values to include in TCP segments.
  * Must be at least 1, but is only used if LWIP_TCP_SACK_OUT is enabled.
  * NOTE: Even though we never send more than 3 or 4 SACK ranges in a single segment
