@@ -412,6 +412,7 @@ netif_add(struct netif *netif,
         LWIP_ASSERT("netif already added", netif2 != netif);
         num_netifs++;
         LWIP_ASSERT("too many netifs, max. supported number is 255", num_netifs <= 255);
+        LWIP_UNUSED_ARG(num_netifs); /* only the assert reads it: set-but-unused under LWIP_NOASSERT */
         if (netif2->num == netif->num) {
           netif->num++;
           break;
